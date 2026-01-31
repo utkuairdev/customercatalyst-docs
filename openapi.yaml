@@ -1,0 +1,327 @@
+openapi: 3.0.3
+info:
+  title: CustomerCatalyst Metrics API
+  description: |
+    Send customer metrics to CustomerCatalyst for product usage scoring.
+    
+    **Rate Limits:**
+    - Maximum 2,000 metrics per API call
+    - Metrics are processed in batches of 500
+    
+    **Authentication:**
+    All endpoints except `/auth` require a Bearer token in the Authorization header.
+  version: 2.0.0
+  contact:
+    name: CustomerCatalyst Support
+    email: support@customercatalyst.io
+
+servers:
+  - url: https://app.customercatalyst.io/api/1.1/wf
+    description: Production server
+
+paths:
+  /auth:
+    post:
+      summary: Authenticate and get access token
+      description: |
+        Authenticate an organization admin and receive a JWT access token.
+        
+        **Token Validity:** 24 hours (86400 seconds)
+        
+        **Usage:** Include the token in all subsequent requests as:
+        `Authorization: Bearer YOUR_TOKEN`
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Email address of the Organization Admin
+                  example: admin@yourorganization.com
+                password:
+                  type: string
+                  format: password
+                  description: Password of the Organization Admin
+                  example: your_secure_password
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  response:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                        description: JWT access token (valid for 24 hours)
+                        example: bus|1729752661023x277131438299202960|1739626905734x668814931658672000
+                      user_id:
+                        type: string
+                        description: Unique identifier for the authenticated user
+                        example: 1729752661023x277131438299202960
+                      expires:
+                        type: integer
+                        description: Token expiration time in seconds
+                        example: 86400
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: error
+                  message:
+                    type: string
+                    example: Invalid email or password
+
+  /upload_metrics:
+    post:
+      summary: Upload customer metrics
+      description: |
+        Send customer metrics for product usage scoring. Each metric is associated with a customer and a specific metric type.
+        
+        **Limits:**
+        - Maximum 2,000 metrics per request
+        - Metrics are processed in batches of 500
+        - Large uploads are automatically split into multiple batches
+        
+        **Supported Metrics:**
+        Metric slugs must match your organization's configured metrics. Common examples:
+        - `number_of_logins` - Login count (usage metric)
+        - `feature_usage` - Feature adoption score (usage metric)
+        - `tasks_completed` - Completed tasks (engagement metric)
+        - `support_tickets` - Support ticket count (engagement metric)
+        - `nps` - Net Promoter Score (engagement metric)
+        
+        **Processing:**
+        - Metrics are validated against your organization's configuration
+        - Values are automatically clamped to configured min/max ranges
+        - Normalized scores (0-100) are calculated automatically
+        - Product usage scores are recalculated daily at 3:00 AM UTC
+      tags:
+        - Metrics
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - organization_id
+                - metrics
+              properties:
+                organization_id:
+                  type: string
+                  description: Your organization's unique identifier in CustomerCatalyst
+                  example: 1755330002129x611465252565155800
+                metrics:
+                  type: array
+                  description: Array of metric objects (maximum 2,000 per request)
+                  maxItems: 2000
+                  items:
+                    type: object
+                    required:
+                      - customer_id
+                      - metric_slug
+                      - value
+                    properties:
+                      customer_id:
+                        type: string
+                        description: Unique identifier for the customer
+                        example: customer_123
+                      metric_slug:
+                        type: string
+                        description: Metric identifier (must be configured in your organization)
+                        example: number_of_logins
+                      value:
+                        type: number
+                        description: Metric value (will be clamped to configured min/max)
+                        example: 45
+            examples:
+              single_metric:
+                summary: Single customer, single metric
+                value:
+                  organization_id: 1755330002129x611465252565155800
+                  metrics:
+                    - customer_id: customer_123
+                      metric_slug: number_of_logins
+                      value: 45
+              
+              multiple_metrics:
+                summary: Multiple customers, multiple metrics
+                value:
+                  organization_id: 1755330002129x611465252565155800
+                  metrics:
+                    - customer_id: customer_123
+                      metric_slug: number_of_logins
+                      value: 45
+                    - customer_id: customer_123
+                      metric_slug: tasks_completed
+                      value: 78
+                    - customer_id: customer_456
+                      metric_slug: number_of_logins
+                      value: 92
+                    - customer_id: customer_456
+                      metric_slug: support_tickets
+                      value: 3
+              
+              large_batch:
+                summary: Large batch (will be auto-batched)
+                value:
+                  organization_id: 1755330002129x611465252565155800
+                  metrics:
+                    - customer_id: customer_001
+                      metric_slug: nps
+                      value: 8
+      
+      responses:
+        '200':
+          description: Metrics accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    description: Whether the upload was accepted
+                    example: true
+                  total_metrics:
+                    type: integer
+                    description: Total number of metrics received
+                    example: 1247
+                  total_batches:
+                    type: integer
+                    description: Number of batches the metrics will be processed in
+                    example: 3
+                  message:
+                    type: string
+                    description: Status message
+                    example: Upload started. Processing in 3 batches.
+              examples:
+                success:
+                  summary: Successful upload
+                  value:
+                    success: true
+                    total_metrics: 1247
+                    total_batches: 3
+                    message: Upload started. Processing in 3 batches.
+        
+        '400':
+          description: Bad request (validation failed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    description: Error message
+              examples:
+                too_large:
+                  summary: Batch too large
+                  value:
+                    success: false
+                    error: Maximum 2,000 metrics per upload. Current batch: 3500
+                    recommendation: Split into multiple API calls
+                
+                org_not_found:
+                  summary: Organization not found
+                  value:
+                    success: false
+                    error: Organization not found
+                
+                no_metrics:
+                  summary: No metrics provided
+                  value:
+                    success: false
+                    error: No metrics provided
+        
+        '401':
+          description: Unauthorized (invalid or expired token)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: error
+                  message:
+                    type: string
+                    example: Invalid or expired token
+        
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: Internal server error
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from the `/auth` endpoint.
+        
+        **Example:**
+        ```
+        Authorization: Bearer bus|1729752661023x277131438299202960|1739626905734x668814931658672000
+        ```
+
+  schemas:
+    Metric:
+      type: object
+      required:
+        - customer_id
+        - metric_slug
+        - value
+      properties:
+        customer_id:
+          type: string
+          description: Unique identifier for the customer
+        metric_slug:
+          type: string
+          description: Metric type identifier
+        value:
+          type: number
+          description: Metric value
+
+tags:
+  - name: Authentication
+    description: Authenticate and obtain access tokens
+  - name: Metrics
+    description: Upload customer metrics for scoring
